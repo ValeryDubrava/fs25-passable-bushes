@@ -37,7 +37,9 @@ local function dumpCollisionFlags()
     end
     print("PassableBushes: all CollisionFlag values:")
     for name, value in pairs(CollisionFlag) do
-        print(string.format("  %-30s = %10d  (0x%08X)", name, value, value))
+        if type(value) == "number" then
+            print(string.format("  %-30s = %10d  (0x%08X)", name, value, value))
+        end
     end
 end
 
