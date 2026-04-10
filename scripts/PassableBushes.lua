@@ -11,38 +11,59 @@
 
 local MOD_NAME = g_currentModName
 
+-- Set to true to log nearby object collision masks whenever the vehicle
+-- gets stuck. Check log.txt, find the seedling/bush entry, note its mask
+-- value, then add the missing bit to EXTRA_VEGETATION_MASKS below and
+-- set this back to false.
+local DIAGNOSTIC_MODE = true
+
+-- Additional collision mask bits to strip beyond CollisionFlag.TREE.
+-- Fill these in based on DIAGNOSTIC_MODE output, e.g. { 64, 512 }.
+local EXTRA_VEGETATION_MASKS = {}
+
 PassableBushes = {}
 
 -- Per-vehicle storage: rootNode id -> list of {node, originalMask}
--- Kept outside vehicles so we don't pollute vehicle objects.
 local vehicleData = {}
 
 -- ============================================================
 -- Collision mask helpers
 -- ============================================================
 
--- Build a bitmask covering all vegetation / tree collision layers.
--- Tries CollisionFlag named constants first; falls back to the known
--- bit-20 value (0x100000) used for trees and split shapes in FS25.
+local function dumpCollisionFlags()
+    if CollisionFlag == nil then
+        print("PassableBushes: CollisionFlag table not available")
+        return
+    end
+    print("PassableBushes: all CollisionFlag values:")
+    for name, value in pairs(CollisionFlag) do
+        print(string.format("  %-30s = %10d  (0x%08X)", name, value, value))
+    end
+end
+
 local function getVegetationMask()
     local mask = 0
 
     if CollisionFlag ~= nil then
-        local candidates = { "TREE", "FOLIAGE", "BUSH", "STATIC_TREE", "SPLIT_SHAPE" }
+        local candidates = { "TREE", "FOLIAGE", "BUSH", "STATIC_TREE", "SPLIT_SHAPE",
+                              "PLANT", "DYNAMIC_OBJECT", "VEGETATION" }
         for _, name in ipairs(candidates) do
             if CollisionFlag[name] ~= nil then
                 mask = bitOR(mask, CollisionFlag[name])
-                print(string.format("PassableBushes: using CollisionFlag.%s = %d", name, CollisionFlag[name]))
+                print(string.format("PassableBushes: using CollisionFlag.%s = %d (0x%X)",
+                    name, CollisionFlag[name], CollisionFlag[name]))
             end
         end
     end
 
+    for _, extra in ipairs(EXTRA_VEGETATION_MASKS) do
+        mask = bitOR(mask, extra)
+        print(string.format("PassableBushes: using extra mask bit %d (0x%X)", extra, extra))
+    end
+
     if mask == 0 then
-        -- Bit 20 is the standard tree / split-shape collision layer in GIANTS Engine.
-        -- If vegetation still stops you after installing the mod, check log.txt for
-        -- CollisionFlag values and adjust this number accordingly.
-        mask = 1048576  -- 2^20
-        print("PassableBushes: CollisionFlag constants not found, using fallback mask " .. mask)
+        mask = 1048576  -- 2^20, fallback
+        print("PassableBushes: no CollisionFlag constants matched, using fallback mask " .. mask)
     end
 
     return mask
@@ -52,14 +73,45 @@ local VEGETATION_MASK = getVegetationMask()
 local INVERSE_MASK    = bitNOT(VEGETATION_MASK)
 
 -- ============================================================
+-- Diagnostic: overlap sphere scan when vehicle appears stuck
+-- ============================================================
+
+local diagCooldown = {}  -- rootNode -> last scan timestamp
+
+local function runDiagnostic(vehicle)
+    local now  = getTime and getTime() or 0
+    local key  = vehicle.rootNode
+    if diagCooldown[key] and now - diagCooldown[key] < 3000 then return end
+    diagCooldown[key] = now
+
+    local x, y, z = getWorldTranslation(vehicle.rootNode)
+    print(string.format("PassableBushes DIAG: scanning 3m sphere around '%s'",
+        getName(vehicle.rootNode)))
+
+    local seen = {}
+    local function onOverlap(hitId)
+        if hitId == vehicle.rootNode or seen[hitId] then return true end
+        seen[hitId] = true
+
+        local name = getName(hitId) or "?"
+        local ok, mask = pcall(getCollisionMask, hitId)
+        if ok and mask ~= nil and mask ~= 0 then
+            print(string.format("PassableBushes DIAG:   '%s'  mask=%d  (0x%08X)",
+                name, mask, mask))
+        end
+        return true
+    end
+
+    overlapSphere(x, y + 0.5, z, 3.0, onOverlap, 0xFFFFFFFF)
+end
+
+-- ============================================================
 -- Per-vehicle apply / restore
 -- ============================================================
 
 local function applyToVehicle(vehicle)
     if vehicle == nil or vehicle.rootNode == nil then return end
-    -- Only drivable vehicles (tractors, combines, trucks …)
     if vehicle.spec_drivable == nil then return end
-    -- Skip if already patched
     if vehicleData[vehicle.rootNode] ~= nil then return end
 
     local modified = {}
@@ -85,8 +137,7 @@ local function applyToVehicle(vehicle)
             #modified, getName(vehicle.rootNode)))
     else
         print("PassableBushes: WARNING — no nodes matched vegetation mask on '"
-            .. getName(vehicle.rootNode)
-            .. "'. The vegetation collision bit may differ in this FS25 build.")
+            .. getName(vehicle.rootNode) .. "'.")
     end
 end
 
@@ -100,16 +151,14 @@ local function removeFromVehicle(vehicle)
         end
     end
     vehicleData[vehicle.rootNode] = nil
+    diagCooldown[vehicle.rootNode] = nil
 end
 
 -- ============================================================
 -- Hook into the Vehicle base class
--- Runs after all specialisations have finished postLoad so that
--- spec_drivable is guaranteed to be present when we check it.
 -- ============================================================
 
 if Vehicle ~= nil then
-    -- Apply after vehicle is fully initialised
     local origPostLoad = Vehicle.postLoad
     Vehicle.postLoad = function(self, ...)
         local result = origPostLoad(self, ...)
@@ -117,7 +166,18 @@ if Vehicle ~= nil then
         return result
     end
 
-    -- Restore before vehicle is destroyed
+    local origUpdateTick = Vehicle.updateTick
+    Vehicle.updateTick = function(self, dt, isActiveForInput, isActiveForInputIgnoreSelection, isSelected)
+        local result = origUpdateTick(self, dt, isActiveForInput, isActiveForInputIgnoreSelection, isSelected)
+        if DIAGNOSTIC_MODE
+            and isActiveForInput
+            and self.spec_drivable ~= nil
+            and (self.lastSpeed == nil or math.abs(self.lastSpeed) < 0.001) then
+            runDiagnostic(self)
+        end
+        return result
+    end
+
     local origDelete = Vehicle.delete
     Vehicle.delete = function(self, ...)
         removeFromVehicle(self)
@@ -126,3 +186,6 @@ if Vehicle ~= nil then
 else
     print("PassableBushes: ERROR — Vehicle class not found. Mod will not work.")
 end
+
+-- Dump all known collision flags once on load so we have the full picture
+dumpCollisionFlags()
