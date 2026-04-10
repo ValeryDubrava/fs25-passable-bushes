@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<modDesc descVersion="79">
+    <author>valery</author>
+    <version>1.0.0.0</version>
+
+    <title>
+        <en>Passable Bushes</en>
+    </title>
+
+    <description>
+        <en>Drive through small trees and bushes without your tractor getting stuck.
+Adds a collision override to all drivable vehicles so they pass through
+decorative bushes and small trees instead of stopping dead.</en>
+    </description>
+
+    <multiplayer supported="true"/>
+
+    <extraSourceFiles>
+        <sourceFile filename="scripts/PassableBushes.lua"/>
+    </extraSourceFiles>
+</modDesc>
