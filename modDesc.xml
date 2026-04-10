@@ -13,6 +13,8 @@ Adds a collision override to all drivable vehicles so they pass through
 decorative bushes and small trees instead of stopping dead.</en>
     </description>
 
+    <iconFilename>icon.png</iconFilename>
+
     <multiplayer supported="true"/>
 
     <extraSourceFiles>
