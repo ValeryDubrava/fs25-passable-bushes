@@ -200,18 +200,30 @@ local function runDiagnostic(vehicle)
 end
 
 -- ============================================================
--- Mod event listener — the reliable FS25 update hook
+-- Periodic update logic (called from whichever hook fires)
 -- ============================================================
-local lastScanMs = 0
-local lastDiagMs = 0
+local lastScanMs  = 0
+local lastDiagMs  = 0
+local updateFired = false   -- one-shot confirmation log
 
-local PassableBushesListener = {}
+local function onModUpdate(dt)
+    if not updateFired then
+        updateFired = true
+        print("PassableBushes: update hook firing — mission=" .. tostring(g_currentMission ~= nil))
+    end
 
-function PassableBushesListener:update(dt)
     if g_currentMission == nil then return end
 
     local vehicle = g_currentMission.controlledVehicle
-    if vehicle == nil or vehicle.rootNode == nil or vehicle.spec_drivable == nil then return end
+    if vehicle == nil or vehicle.rootNode == nil or vehicle.spec_drivable == nil then
+        -- Log once per 5 s so we know the hook is alive even without a vehicle
+        local now = g_currentMission.time or 0
+        if DIAGNOSTIC_MODE and now - lastDiagMs >= 5000 then
+            lastDiagMs = now
+            print("PassableBushes DIAG: update alive, no controlled vehicle yet")
+        end
+        return
+    end
 
     local now = g_currentMission.time or 0
 
@@ -231,7 +243,26 @@ function PassableBushesListener:update(dt)
     end
 end
 
+-- ============================================================
+-- Hook 1: addModEventListener (standard FS25 mod API)
+-- ============================================================
+local PassableBushesListener = {}
+function PassableBushesListener:update(dt)
+    onModUpdate(dt)
+end
 addModEventListener(PassableBushesListener)
+
+-- ============================================================
+-- Hook 2: FSBaseMission.update (fallback if listener:update never fires)
+-- ============================================================
+if FSBaseMission ~= nil and FSBaseMission.update ~= nil then
+    FSBaseMission.update = Utils.appendedFunction(FSBaseMission.update, function(self, dt)
+        onModUpdate(dt)
+    end)
+    print("PassableBushes: FSBaseMission.update hook installed")
+else
+    print("PassableBushes: FSBaseMission not available")
+end
 
 -- ============================================================
 -- Vehicle.delete hook — restore masks when a vehicle is removed
