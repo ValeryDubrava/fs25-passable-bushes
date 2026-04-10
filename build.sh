@@ -11,6 +11,6 @@ OUT="$SCRIPT_DIR/$ZIP_NAME"
 cd "$SCRIPT_DIR"
 
 rm -f "$OUT"
-zip -r "$OUT" modDesc.xml icon.png scripts/
+zip -r "$OUT" modDesc.xml icon.dds scripts/
 
 echo "Built: $OUT"
