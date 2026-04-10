@@ -206,6 +206,27 @@ local lastScanMs  = 0
 local lastDiagMs  = 0
 local updateFired = false   -- one-shot confirmation log
 
+-- Try every known FS25 property name for the player's current vehicle.
+local function findControlledVehicle()
+    local m = g_currentMission
+    if m == nil then return nil end
+
+    -- Direct mission properties (name changed between FS versions)
+    if m.controlledVehicle  ~= nil then return m.controlledVehicle  end
+    if m.playerVehicle      ~= nil then return m.playerVehicle      end
+    if m.currentVehicle     ~= nil then return m.currentVehicle     end
+
+    -- Via local player object
+    if g_localPlayer ~= nil then
+        local p = g_localPlayer
+        if p.controlledVehicle ~= nil then return p.controlledVehicle end
+        if p.vehicle           ~= nil then return p.vehicle           end
+        if p.currentVehicle    ~= nil then return p.currentVehicle    end
+    end
+
+    return nil
+end
+
 local function onModUpdate(dt)
     if not updateFired then
         updateFired = true
@@ -214,21 +235,46 @@ local function onModUpdate(dt)
 
     if g_currentMission == nil then return end
 
-    local vehicle = g_currentMission.controlledVehicle
+    local now = g_currentMission.time or 0
+
+    -- Patch ALL drivable vehicles we can find (not just the controlled one),
+    -- so the TREE-bit removal works regardless of which vehicle is active.
+    if g_currentMission.vehicles ~= nil then
+        for _, v in ipairs(g_currentMission.vehicles) do
+            if v.rootNode ~= nil and v.spec_drivable ~= nil then
+                applyVehicleNodePatch(v)
+            end
+        end
+    end
+
+    local vehicle = findControlledVehicle()
+
     if vehicle == nil or vehicle.rootNode == nil or vehicle.spec_drivable == nil then
-        -- Log once per 5 s so we know the hook is alive even without a vehicle
-        local now = g_currentMission.time or 0
         if DIAGNOSTIC_MODE and now - lastDiagMs >= 5000 then
             lastDiagMs = now
-            print("PassableBushes DIAG: update alive, no controlled vehicle yet")
+            -- Dump everything that might tell us the right property name
+            print("PassableBushes DIAG: controlled vehicle not found — dumping candidates:")
+            local m = g_currentMission
+            print("  mission.controlledVehicle = " .. tostring(m.controlledVehicle))
+            print("  mission.playerVehicle     = " .. tostring(m.playerVehicle))
+            print("  mission.currentVehicle    = " .. tostring(m.currentVehicle))
+            if g_localPlayer ~= nil then
+                local p = g_localPlayer
+                print("  localPlayer.controlledVehicle = " .. tostring(p.controlledVehicle))
+                print("  localPlayer.vehicle           = " .. tostring(p.vehicle))
+                print("  localPlayer.currentVehicle    = " .. tostring(p.currentVehicle))
+            else
+                print("  g_localPlayer = nil")
+            end
+            local count = g_currentMission.vehicles and #g_currentMission.vehicles or 0
+            print("  mission.vehicles count = " .. count)
+            for i, v in ipairs(g_currentMission.vehicles or {}) do
+                print(string.format("  vehicle[%d] '%s'  drivable=%s",
+                    i, getName(v.rootNode) or "?", tostring(v.spec_drivable ~= nil)))
+            end
         end
         return
     end
-
-    local now = g_currentMission.time or 0
-
-    -- One-time patch of the vehicle's own collision nodes
-    applyVehicleNodePatch(vehicle)
 
     -- Scan nearby static objects every 500 ms
     if now - lastScanMs >= 500 then
